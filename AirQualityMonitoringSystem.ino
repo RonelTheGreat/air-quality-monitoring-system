@@ -3,6 +3,11 @@
 #include <SD.h>
 #include <DHT.h>
 #include <MQ135.h>
+#include <EEPROM.h>
+
+// if calibrating set to true
+bool isCalibrating = false;
+float rZero = 0.0;
 
 //~~~~ LIBRARIES & PIN CONFIGURATIONS ~~~~~~~//
 HardwareSerial &gsmSerial = Serial1;
@@ -44,7 +49,7 @@ const unsigned int humidityThreshold = 80;
 
 // co2 sensor
 int ppm = 0;
-unsigned long preheatTime = 300000;
+unsigned long preheatTime = 300000; 
 const unsigned int ppmThreshold = 1000;
 
 // SD / logging
@@ -79,8 +84,17 @@ bool isSendingNotification = false;
 byte humiditySampleCount = 0;
 byte ppmSampleCount = 0;
 byte temperatureSampleCount = 0;
-const byte maxSampleCount = 4;
+const byte maxSampleCount = 2;
 char currentSensorOnCheck[16] = "humidity";
+
+// EEPROM
+const int temperatureAddress = 20;
+const int humidityAddress = 30;
+const int ppmAddress = 40;
+
+const int hasMaximumTempSetAddress = 50;
+const int hasMaximumHumSetAddress = 60;
+const int hasMaximumPpmSetAddress = 70;
 
 // icons
 byte clockIcon[] = {
@@ -150,7 +164,7 @@ void loop() {
   readSensorData();
   sendNotification();
   turnOffBuzzAlert();
-  logReadings();
+  logReadings(false);
   showSensorDataAndTime();
 }
 
@@ -203,10 +217,13 @@ void initializeRtc() {
     lcd.print("RTC failed");
     while (1);
   }
-
-  if (rtc.lostPower()) {
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  }
+  
+  // adjust time according to compile time
+  // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  
+  // adjust time manually
+  // year, month, date, hour, min, second
+  // rtc.adjust(DateTime(2021, 8, 3, 10, 29, 0));
 }
 void initializeSdCard() {
   delay(initScreenDelay);
@@ -302,6 +319,11 @@ void readSensorData() {
       humidity = dht.readHumidity();
     }
 
+    // for calibration
+    if (isCalibrating) {
+      rZero = co2Sensor.getRZero();
+    }
+    
     checkCo2();
     checkTemperature();
     checkHumidity();
@@ -317,6 +339,8 @@ void checkCo2() {
           sprintf(message, "Co2 concentration is %i ppm and is not safe!", ppm);
           buzzStartedAt = timeElapsed;
           buzz(true);
+
+          checkNewMaximum("co2");
           
           isSendingNotification = true;
           messageSentCount++;
@@ -348,6 +372,9 @@ void checkTemperature() {
       } else {
         if (temperatureSampleCount >= maxSampleCount && strlen(message) == 0) {
           sprintf(message, "Temperature is %i degree celsius and is not safe!", temperature);
+
+          checkNewMaximum("temperature");
+            
           isSendingNotification = true;
           messageSentCount++;
           return;
@@ -378,6 +405,9 @@ void checkHumidity() {
       } else {
         if (humiditySampleCount >= maxSampleCount && strlen(message) == 0) {
           sprintf(message, "Humidity is %i%s and is not safe!", humidity, "%");
+          
+          checkNewMaximum("humidity");
+          
           isSendingNotification = true;
           messageSentCount++;
           return;
@@ -400,8 +430,47 @@ void checkHumidity() {
   }
 }
 
-void logReadings() {
-  if (timeElapsed - lastLogTime >= logTimeout) {
+void checkNewMaximum(char *currentSensor) {
+  int prevMax = 0;
+  int currentValue = 0;
+  int sensorAddress = 0;
+  int hasMaximumSetAddress = 0;
+
+  // co2
+  if (!strcmp(currentSensor, "co2")) {
+    // get co2 prev max
+    prevMax = getPreviousMaximum(ppmAddress);
+    hasMaximumSetAddress = hasMaximumPpmSetAddress;
+    sensorAddress = ppmAddress;
+    currentValue = ppm;
+  }
+  // temperature
+  if (!strcmp(currentSensor, "temperature")) {
+    // get temperature prev max
+    prevMax = getPreviousMaximum(temperatureAddress);
+    hasMaximumSetAddress = hasMaximumTempSetAddress;
+    sensorAddress = temperatureAddress;
+    currentValue = temperature;
+  }
+  // humidity
+  if (!strcmp(currentSensor, "humidity")) {
+    // get humidity prev max
+    prevMax = getPreviousMaximum(humidityAddress);
+    hasMaximumSetAddress = hasMaximumHumSetAddress;
+    sensorAddress = humidityAddress;
+    currentValue = humidity;
+  }
+
+  // compare
+  if (currentValue > prevMax) {
+    // update EEPROM
+    setNewMaximum(sensorAddress, currentValue, hasMaximumSetAddress);
+    // force log
+    logReadings(true);
+  }
+}
+void logReadings(bool isForced) {
+  if (( timeElapsed - lastLogTime >= logTimeout ) || isForced) {
     lastLogTime = timeElapsed;
     DateTime current = rtc.now();
 
@@ -415,6 +484,11 @@ void logReadings() {
 
     file.print(ppm);
     file.print(tabChar);
+
+    if (isCalibrating) {
+      file.print(rZero);
+      file.print(tabChar);
+    }
 
     file.print(current.hour());
     file.print(colonChar);
@@ -561,6 +635,12 @@ void prepareTextFile() {
     file.print("Temperature \t");
     file.print("Humidity \t");
     file.print("Co2 (ppm) \t");
+
+    // for calibration
+    if (isCalibrating) {
+      file.print("RZERO \t");
+    }
+    
     file.print("Time \t");
     file.println("Date \t");
     file.close();
@@ -585,10 +665,12 @@ bool sendSms(char *message) {
       gsmSerial.println("AT+CMGS=\"+639064209700\"\r");
     }
     if (!strcmp(currentCommand, "contact") && strcmp(prevCommand, "txtMode")) {
+      strcpy(currentCommand, "message");
       gsmSerial.println(message);
     }
     if (!strcmp(currentCommand, "message") && strcmp(prevCommand, "contact")) {
-      gsmSerial.println("\x1a");
+      strcpy(currentCommand, "end");
+      gsmSerial.println((char)26);
     }
     if (!strcmp(currentCommand, "end") && strcmp(prevCommand, "message")) {
       currentCommand[0] = NULL;
@@ -625,6 +707,24 @@ void setNextSensor() {
     return;
   }
 
+}
+void setNewMaximum(int address, int value, int hasMaximumSetAddress) {
+  byte hasMaximumSet = 0;
+  EEPROM.get(hasMaximumSetAddress, hasMaximumSet);
+
+  // for initial maximum reading only
+  if (hasMaximumSet == 0) {
+     EEPROM.write(address, value >> 8);
+     EEPROM.write(address + 1, value & 255);
+     EEPROM.update(hasMaximumSetAddress, 1);
+     return;
+  }
+  
+  EEPROM.write(address, value >> 8);
+  EEPROM.write(address + 1, value & 255);
+}
+int getPreviousMaximum(int address) {
+  return (EEPROM.read(address) << 8) + EEPROM.read(address + 1);
 }
 void readGsmResponse() {
   static byte ndx = 0;
