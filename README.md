@@ -2,11 +2,11 @@
 Arduino based project for monitoring Co2 concentration, temperature and humidity
 
 ## Dependencies
-  - LiquidCrystal I2C by Frank de Brabander v1.1.2
+  - LiquidCrystal I2C by Marco Schwartz v1.1.2
   - RTCLib by Adafruit v1.12.5
   - SD (arduino built-in)
   - DHT sensor library by Adafruit v1.4.2
-  - MQ135 [Link to repository](https://github.com/GeorgK/MQ135/blob/master/MQ135.cpp)
+  - MQ135 [Link to repository](https://github.com/GeorgK/MQ135)
 
 ## What to change in MQ135 hardware & library 
 1. Change load resistor from 1k to 22k ohms for better resolution
