@@ -17,7 +17,7 @@ Arduino based project for monitoring Co2 concentration, temperature and humidity
 1. Power the sensor for 24 hrs
 2. After 24 hrs, take it outside and get `RZERO` readings for calibration (`MQ135.getRZero()`).
 3. Let it settle and record readings for 30 minutes or 1 hour. It is much better to get average from the readings.
-4. Open `MQ135.h` and change `RZERO` value with the one obtained from step #3.
+4. Open `MQ135.h` and change `RZERO` value with the one obtained from step #3 (for this project `RZERO` is `52.94`).
 
 ### Helpful blog post
 - https://blog.robberg.net/mq-135-arduino/
