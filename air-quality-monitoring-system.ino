@@ -42,22 +42,28 @@ struct cellularNetwork {
 } network;
 
 // temp sensor
-int humidity = 0;
-int temperature = 0;
-const unsigned int temperatureThreshold = 30;
-const unsigned int humidityThreshold = 80;
+float humidity = 0.0;
+float temperature = 0.0;
+const float temperatureThreshold = 36.0;
+const float humidityThreshold = 90.0;
 
 // co2 sensor
-int ppm = 0;
-unsigned long preheatTime = 300000; 
-const unsigned int ppmThreshold = 1000;
+float ppm = 0.0;
+const float ppmThreshold = 1000.0;
+const float earlyWarningThreshold = 900.0;
+//unsigned int preheatTime = 300000;
+unsigned int preheatTime = 5000;
+float currentMaxPpm = 0.0;
 
 // SD / logging
-const unsigned long logTimeout = 3600000;
+//const unsigned long logTimeout = 3600000;
+const unsigned long logTimeout = 300000;
 unsigned long lastLogTime = 0;
 const char *tabChar = "\t";
 const char *colonChar = ":";
 const char *forwardSlashChar = "/";
+const char *txtFilename = "dev.txt"; // for development
+//const char *txtFilename = "logs.txt"; // for production
 
 // buzzer
 unsigned long buzzStartedAt = 0;
@@ -88,13 +94,13 @@ const byte maxSampleCount = 2;
 char currentSensorOnCheck[16] = "humidity";
 
 // EEPROM
-const int temperatureAddress = 20;
-const int humidityAddress = 30;
-const int ppmAddress = 40;
-
-const int hasMaximumTempSetAddress = 50;
-const int hasMaximumHumSetAddress = 60;
-const int hasMaximumPpmSetAddress = 70;
+struct Date {
+  int _month;
+  int _day;
+  int _year;
+};
+int dateLastCheckedAddress = 100;
+int prevMaxReadingAddress = 200;
 
 // icons
 byte clockIcon[] = {
@@ -217,10 +223,10 @@ void initializeRtc() {
     lcd.print("RTC failed");
     while (1);
   }
-  
+
   // adjust time according to compile time
   // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  
+
   // adjust time manually
   // year, month, date, hour, min, second
   // rtc.adjust(DateTime(2021, 8, 3, 10, 29, 0));
@@ -306,7 +312,7 @@ void sendNotification() {
         setNextSensor();
       }
     }
-  } 
+  }
 }
 void readSensorData() {
   if (timeElapsed - lastSensorRead >= sensorReadTimeout) {
@@ -319,162 +325,169 @@ void readSensorData() {
       humidity = dht.readHumidity();
     }
 
-    // for calibration
     if (isCalibrating) {
       rZero = co2Sensor.getRZero();
     }
-    
+
     checkCo2();
     checkTemperature();
     checkHumidity();
   }
 }
 void checkCo2() {
-  if (!isSendingNotification && !strcmp(currentSensorOnCheck, "co2")) {
-    if (ppm >= ppmThreshold) {
-      if (hasBeenNotifiedCo2) {
-        setNextSensor();
-      } else {
-        if (ppmSampleCount >= maxSampleCount && strlen(message) == 0) {
-          sprintf(message, "Co2 concentration is %i ppm and is not safe!", ppm);
-          buzzStartedAt = timeElapsed;
-          buzz(true);
+  if (isSendingNotification || strcmp(currentSensorOnCheck, "co2")) {
+    return;
+  }
 
-          checkNewMaximum("co2");
-          
-          isSendingNotification = true;
-          messageSentCount++;
-          return;
-        }
-        ppmSampleCount++;
-      }
+  if (ppm >= ppmThreshold || ppm >= earlyWarningThreshold) {
+    if (hasBeenNotifiedCo2) {
+      setNextSensor();
+      return;
     }
 
-    if (ppm < ppmThreshold) {
-      if (ppmSampleCount > 0) {
-        ppmSampleCount = 0;
-      }
-      // kun na-notify na
-      if (hasBeenNotifiedCo2) {
-        hasBeenNotifiedCo2 = false;
-        ppmSampleCount = 0;
-      } else {
-        setNextSensor();
-      }
+    if (strlen(message) > 0) {
+      return;
     }
+
+    if (ppmSampleCount < maxSampleCount) {
+      ppmSampleCount++;
+      return;
+    }
+
+    char ppmStr[16];
+    dtostrf(ppm, 4, 2, ppmStr);
+    sprintf(message, "Co2 concentration is %s ppm and is not safe!", ppmStr);
+
+    buzzStartedAt = timeElapsed;
+    buzz(true);
+
+    isSendingNotification = true;
+    messageSentCount++;
+
+    currentMaxPpm = ppm;
+    checkNewMaximum();
+
+    return;
+  }
+
+  ppmSampleCount = 0;
+  if (!hasBeenNotifiedCo2) {
+    setNextSensor();
+  } else {
+    hasBeenNotifiedCo2 = false;
   }
 }
 void checkTemperature() {
-  if (!isSendingNotification && !strcmp(currentSensorOnCheck, "temperature")) {
-    if (temperature >= temperatureThreshold) {
-      if (hasBeenNotifiedTemperature) {
-        setNextSensor();
-      } else {
-        if (temperatureSampleCount >= maxSampleCount && strlen(message) == 0) {
-          sprintf(message, "Temperature is %i degree celsius and is not safe!", temperature);
+  if (isSendingNotification || strcmp(currentSensorOnCheck, "temperature")) {
+    return;
+  }
 
-          checkNewMaximum("temperature");
-            
-          isSendingNotification = true;
-          messageSentCount++;
-          return;
-        }
-        temperatureSampleCount++;
-      }
+  if (temperature >= temperatureThreshold) {
+    if (hasBeenNotifiedTemperature) {
+      setNextSensor();
+      return;
     }
 
-    if (temperature < temperatureThreshold) {
-      if (temperatureSampleCount > 0) {
-        temperatureSampleCount = 0;
-      }
-      
-      if (hasBeenNotifiedTemperature) {
-        hasBeenNotifiedTemperature = false;
-        temperatureSampleCount = 0;
-      } else {
-        setNextSensor();
-      }
+    if (strlen(message) > 0) {
+      return;
     }
+
+    if (temperatureSampleCount < maxSampleCount) {
+      temperatureSampleCount++;
+      return;
+    }
+
+    char tempStr[16];
+    dtostrf(temperature, 4, 2, tempStr);
+    sprintf(message, "Temperature is %s degree celsius and is not safe!", tempStr);
+
+    isSendingNotification = true;
+    messageSentCount++;
+    return;
+  }
+
+  temperatureSampleCount = 0;
+  if (!hasBeenNotifiedTemperature) {
+    setNextSensor();
+  } else {
+    hasBeenNotifiedTemperature = false;
   }
 }
 void checkHumidity() {
-  if (!isSendingNotification && !strcmp(currentSensorOnCheck, "humidity")) {
-    if (humidity >= humidityThreshold) {
-      if (hasBeenNotifiedHumidity) {
-        setNextSensor();
-      } else {
-        if (humiditySampleCount >= maxSampleCount && strlen(message) == 0) {
-          sprintf(message, "Humidity is %i%s and is not safe!", humidity, "%");
-          
-          checkNewMaximum("humidity");
-          
-          isSendingNotification = true;
-          messageSentCount++;
-          return;
-        }
-        humiditySampleCount++;
-      }
+  if (isSendingNotification || strcmp(currentSensorOnCheck, "humidity")) {
+    return;
+  }
+
+  if (humidity >= humidityThreshold) {
+    if (hasBeenNotifiedHumidity) {
+      setNextSensor();
+      return;
     }
 
-    if (humidity < humidityThreshold) {
-       if (humiditySampleCount > 0) {
-        humiditySampleCount = 0;
-       }
-       if (hasBeenNotifiedHumidity) {
-        hasBeenNotifiedHumidity = false;
-        humiditySampleCount = 0;
-       } else {
-        setNextSensor();
-       }
+    if (strlen(message) > 0) {
+      return;
     }
+
+    if (humiditySampleCount < maxSampleCount) {
+      humiditySampleCount++;
+      return;
+    }
+
+    char humStr[16];
+    dtostrf(humidity, 4, 2, humStr);
+    sprintf(message, "Humidity is %s%% and is not safe!", humStr);
+
+    isSendingNotification = true;
+    messageSentCount++;
+    return;
+  }
+
+  humiditySampleCount = 0;
+  if (!hasBeenNotifiedHumidity) {
+    setNextSensor();
+  } else {
+    hasBeenNotifiedHumidity = false;
   }
 }
 
-void checkNewMaximum(char *currentSensor) {
-  int prevMax = 0;
-  int currentValue = 0;
-  int sensorAddress = 0;
-  int hasMaximumSetAddress = 0;
+void checkNewMaximum() {
+  Date dateLastChecked;
+  float prevMaxReading;
 
-  // co2
-  if (!strcmp(currentSensor, "co2")) {
-    // get co2 prev max
-    prevMax = getPreviousMaximum(ppmAddress);
-    hasMaximumSetAddress = hasMaximumPpmSetAddress;
-    sensorAddress = ppmAddress;
-    currentValue = ppm;
-  }
-  // temperature
-  if (!strcmp(currentSensor, "temperature")) {
-    // get temperature prev max
-    prevMax = getPreviousMaximum(temperatureAddress);
-    hasMaximumSetAddress = hasMaximumTempSetAddress;
-    sensorAddress = temperatureAddress;
-    currentValue = temperature;
-  }
-  // humidity
-  if (!strcmp(currentSensor, "humidity")) {
-    // get humidity prev max
-    prevMax = getPreviousMaximum(humidityAddress);
-    hasMaximumSetAddress = hasMaximumHumSetAddress;
-    sensorAddress = humidityAddress;
-    currentValue = humidity;
+  EEPROM.get(dateLastCheckedAddress, dateLastChecked);
+  EEPROM.get(prevMaxReadingAddress, prevMaxReading);
+
+  DateTime current = rtc.now();
+  int currentMonth = current.month();
+  int currentDay = current.day();
+  int currentYear = current.year();
+
+  if (
+    dateLastChecked._month == currentMonth &&
+    dateLastChecked._day == currentDay &&
+    dateLastChecked._year == currentYear
+  ) {
+    if (currentMaxPpm < prevMaxReading) {
+      return;
+    }
   }
 
-  // compare
-  if (currentValue > prevMax) {
-    // update EEPROM
-    setNewMaximum(sensorAddress, currentValue, hasMaximumSetAddress);
-    // force log
-    logReadings(true);
-  }
+  logReadings(true);
+
+  EEPROM.put(prevMaxReadingAddress, currentMaxPpm);
+
+  Date currentDate;
+  currentDate._month = currentMonth;
+  currentDate._day = currentDay;
+  currentDate._year = currentYear;
+  EEPROM.put(dateLastCheckedAddress, currentDate);
 }
 void logReadings(bool isForced) {
   if (( timeElapsed - lastLogTime >= logTimeout ) || isForced) {
     lastLogTime = timeElapsed;
     DateTime current = rtc.now();
 
-    file = SD.open("logs.txt", FILE_WRITE);
+    file = SD.open(txtFilename, FILE_WRITE);
 
     file.print(temperature);
     file.print(tabChar);
@@ -489,6 +502,13 @@ void logReadings(bool isForced) {
       file.print(rZero);
       file.print(tabChar);
     }
+
+    if (isForced) {
+      file.print(currentMaxPpm);
+    } else {
+      file.print("");
+    }
+    file.print(tabChar);
 
     file.print(current.hour());
     file.print(colonChar);
@@ -544,40 +564,41 @@ void showTime() {
   lcd.print(currentMinuteBuff);
 }
 void showCo2Ppm() {
+  char ppmStr[16];
+  dtostrf(ppm, 4, 2, ppmStr);
+
   lcd.setCursor(0, 1);
   lcd.write(3);
   lcd.setCursor(2, 1);
   lcd.print("CO2");
   lcd.setCursor(7, 1);
-  lcd.print(ppm);
-  if (ppm < 1000 && ppm >= 100) {
-    lcd.setCursor(10, 1);
-    lcd.print("   ");
-  }
-  if (ppm < 100 && ppm >= 10) {
-    lcd.setCursor(9, 1);
-    lcd.print("    ");
+  lcd.print(ppmStr);
+
+  if (strlen(ppmStr) == 6) {
+    lcd.setCursor(13, 1);
+    lcd.print("       ");
   }
 }
 void showTemperature() {
+  char tempStr[16];
+  dtostrf(temperature, 4, 2, tempStr);
+
   lcd.setCursor(0, 2);
   lcd.write(1);
   lcd.setCursor(2, 2);
   lcd.print("TEMP");
   lcd.setCursor(7, 2);
-  lcd.print(temperature);
-  if (temperature >= 100) {
-    lcd.setCursor(11, 2);
+  lcd.print(tempStr);
+
+  if (strlen(tempStr) == 5) {
+    lcd.setCursor(13, 2);
   }
-  if (temperature < 100 && temperature > 10) {
-    lcd.setCursor(10, 2);
-  }
-  if (temperature < 10) {
-    lcd.setCursor(9, 2);
+  if (strlen(tempStr) == 6) {
+    lcd.setCursor(14, 2);
   }
 
   lcd.print("\xdf");
-  lcd.print("C  ");
+  lcd.print("C    ");
 }
 void showHumidity() {
   lcd.setCursor(0, 3);
@@ -588,16 +609,16 @@ void showHumidity() {
   lcd.print(humidity);
 
   if (humidity >= 100) {
-    lcd.setCursor(12, 3);
+    lcd.setCursor(15, 3);
   }
   if (humidity < 100 && humidity > 10) {
-    lcd.setCursor(10, 3);
+    lcd.setCursor(13, 3);
   }
   if (humidity < 10) {
-    lcd.setCursor(9, 3);
+    lcd.setCursor(12, 3);
   }
 
-  lcd.print("%  ");
+  lcd.print("%   ");
 }
 //~~~~~~~~~~~~~~~~~~~~~//
 
@@ -626,21 +647,21 @@ void getNetworkStatus() {
   }
 }
 void prepareTextFile() {
-  if (SD.exists("logs.txt")) {
+  if (SD.exists(txtFilename)) {
     return;
   }
 
-  file = SD.open("logs.txt", FILE_WRITE);
+  file = SD.open(txtFilename, FILE_WRITE);
   if (file) {
     file.print("Temperature \t");
     file.print("Humidity \t");
     file.print("Co2 (ppm) \t");
 
-    // for calibration
     if (isCalibrating) {
       file.print("RZERO \t");
     }
-    
+
+    file.print("Co2 (ppm) Max reading \t");
     file.print("Time \t");
     file.println("Date \t");
     file.close();
@@ -662,7 +683,8 @@ bool sendSms(char *message) {
     startedAt = timeElapsed;
     if (!strcmp(prevCommand, "txtMode")) {
       strcpy(currentCommand, "contact");
-      gsmSerial.println("AT+CMGS=\"+639064209700\"\r");
+      //      gsmSerial.println("AT+CMGS=\"+639064209700\"\r");
+      gsmSerial.println("AT+CMGS=\"+639514642872\"\r");
     }
     if (!strcmp(currentCommand, "contact") && strcmp(prevCommand, "txtMode")) {
       strcpy(currentCommand, "message");
@@ -696,36 +718,19 @@ void setNextSensor() {
     strcpy(currentSensorOnCheck, "temperature");
     return;
   }
-  
+
   if (!strcmp(currentSensorOnCheck, "temperature")) {
     strcpy(currentSensorOnCheck, "humidity");
     return;
   }
-  
+
   if (!strcmp(currentSensorOnCheck, "humidity")) {
     strcpy(currentSensorOnCheck, "co2");
     return;
   }
 
 }
-void setNewMaximum(int address, int value, int hasMaximumSetAddress) {
-  byte hasMaximumSet = 0;
-  EEPROM.get(hasMaximumSetAddress, hasMaximumSet);
 
-  // for initial maximum reading only
-  if (hasMaximumSet == 0) {
-     EEPROM.write(address, value >> 8);
-     EEPROM.write(address + 1, value & 255);
-     EEPROM.update(hasMaximumSetAddress, 1);
-     return;
-  }
-  
-  EEPROM.write(address, value >> 8);
-  EEPROM.write(address + 1, value & 255);
-}
-int getPreviousMaximum(int address) {
-  return (EEPROM.read(address) << 8) + EEPROM.read(address + 1);
-}
 void readGsmResponse() {
   static byte ndx = 0;
   char endMarker = '\n';
