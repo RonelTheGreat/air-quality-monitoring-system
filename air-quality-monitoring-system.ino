@@ -47,31 +47,39 @@ float temperature = 0.0;
 const float temperatureThreshold = 36.0;
 const float humidityThreshold = 90.0;
 
+float heatIndex = 0.0;
+float heatIndexPrevMaximum = 27.0;
+const float cautionLowerLimit = 27.0;
+const float cautionUpperLimit = 32.0;
+const float extremeCautionLowerLimit = 32;
+const float extremeCautionUpperLimit = 41;
+const float dangerLowerLimit = 41;
+const float dangerUpperLimit = 54;
+const float extremeDanger = 54;
+char range[16];
+
 // co2 sensor
 float ppm = 0.0;
 const float ppmThreshold = 1000.0;
 const float earlyWarningThreshold = 900.0;
-//unsigned int preheatTime = 300000;
-unsigned int preheatTime = 5000;
+unsigned int preheatTime = 300000;
 float currentMaxPpm = 0.0;
 
 // SD / logging
-//const unsigned long logTimeout = 3600000;
-const unsigned long logTimeout = 300000;
+const unsigned long logTimeout = 3600000;
 unsigned long lastLogTime = 0;
 const char *tabChar = "\t";
 const char *colonChar = ":";
 const char *forwardSlashChar = "/";
-const char *txtFilename = "dev.txt"; // for development
-//const char *txtFilename = "logs.txt"; // for production
+//const char *txtFilename = "dev.txt"; // for development
+const char *txtFilename = "logs.txt"; // for production
 
 // buzzer
 unsigned long buzzStartedAt = 0;
 const unsigned int buzzTimeout = 5000;
 
 // sms
-bool hasBeenNotifiedTemperature = false;
-bool hasBeenNotifiedHumidity = false;
+bool hasBeenNotifiedHeatIndex = false;
 bool hasBeenNotifiedCo2 = false;
 bool hasStartedSendingSms = false;
 
@@ -81,17 +89,16 @@ char currentCommand[8];
 char prevCommand[8];
 char msgBuff[64];
 
-const byte maxMessageSentCount = 1;
+const byte maxMessageSentCount = 2;
 byte messageSentCount = 0;
 char message[64];
 bool isSendingNotification = false;
 
 // sensors on check
-byte humiditySampleCount = 0;
 byte ppmSampleCount = 0;
-byte temperatureSampleCount = 0;
+byte heatIndexSampleCount = 0;
 const byte maxSampleCount = 2;
-char currentSensorOnCheck[16] = "humidity";
+char currentSensorOnCheck[16] = "dht";
 
 // EEPROM
 struct Date {
@@ -143,6 +150,16 @@ byte co2Icon[] = {
   B01100,
   B00000
 };
+byte heatIndexIcon[] = {
+  B10001,
+  B00100,
+  B10110,
+  B01110,
+  B01111,
+  B11111,
+  B11110,
+  B01110
+};
 
 // general
 const unsigned int initScreenDelay = 2000;
@@ -151,6 +168,7 @@ unsigned long lastSensorRead = 0;
 const unsigned int sensorReadTimeout = 2000;
 unsigned long lastScreenRefresh = 0;
 const unsigned int screenTimeout = 1000;
+
 //~~~~~~~~~~~~~~~~~~~~~//
 
 void setup() {
@@ -182,6 +200,7 @@ void initializeLcd() {
   lcd.createChar(1, temperatureIcon);
   lcd.createChar(2, humidityIcon);
   lcd.createChar(3, co2Icon);
+  lcd.createChar(4, heatIndexIcon);
 }
 void welcomeScreen() {
   lcd.setCursor(5, 0);
@@ -299,11 +318,8 @@ void sendNotification() {
         if (!strcmp(currentSensorOnCheck, "co2")) {
           hasBeenNotifiedCo2 = true;
         }
-        if (!strcmp(currentSensorOnCheck, "temperature")) {
-          hasBeenNotifiedTemperature = true;
-        }
-        if (!strcmp(currentSensorOnCheck, "humidity")) {
-          hasBeenNotifiedHumidity = true;
+        if (!strcmp(currentSensorOnCheck, "dht")) {
+          hasBeenNotifiedHeatIndex = true;
         }
 
         message[0] = NULL;
@@ -323,6 +339,7 @@ void readSensorData() {
     if (!isnan(dht.readTemperature()) && !isnan(dht.readHumidity())) {
       temperature = dht.readTemperature();
       humidity = dht.readHumidity();
+      heatIndex = dht.computeHeatIndex(temperature, humidity, false);
     }
 
     if (isCalibrating) {
@@ -330,8 +347,7 @@ void readSensorData() {
     }
 
     checkCo2();
-    checkTemperature();
-    checkHumidity();
+    checkHeatIndex();
   }
 }
 void checkCo2() {
@@ -377,13 +393,13 @@ void checkCo2() {
     hasBeenNotifiedCo2 = false;
   }
 }
-void checkTemperature() {
-  if (isSendingNotification || strcmp(currentSensorOnCheck, "temperature")) {
+void checkHeatIndex() {
+  if (isSendingNotification || strcmp(currentSensorOnCheck, "dht")) {
     return;
   }
 
-  if (temperature >= temperatureThreshold) {
-    if (hasBeenNotifiedTemperature) {
+  if (heatIndex > cautionLowerLimit && !inPrevRange()) {
+    if (hasBeenNotifiedHeatIndex) {
       setNextSensor();
       return;
     }
@@ -392,62 +408,83 @@ void checkTemperature() {
       return;
     }
 
-    if (temperatureSampleCount < maxSampleCount) {
-      temperatureSampleCount++;
+    if (heatIndexSampleCount < maxSampleCount) {
+      heatIndexSampleCount++;
       return;
     }
 
-    char tempStr[16];
-    dtostrf(temperature, 4, 2, tempStr);
-    sprintf(message, "Temperature is %s degree celsius and is not safe!", tempStr);
-
+    getHeatIndexMessage();
     isSendingNotification = true;
+    heatIndexPrevMaximum = heatIndex;
     messageSentCount++;
     return;
   }
 
-  temperatureSampleCount = 0;
-  if (!hasBeenNotifiedTemperature) {
+  heatIndexSampleCount = 0;
+  if (!hasBeenNotifiedHeatIndex) {
     setNextSensor();
   } else {
-    hasBeenNotifiedTemperature = false;
+    hasBeenNotifiedHeatIndex = false;
   }
 }
-void checkHumidity() {
-  if (isSendingNotification || strcmp(currentSensorOnCheck, "humidity")) {
-    return;
+bool inPrevRange() {  
+  char prevRange[16];
+  char currentRange[16];
+
+  getHeatIndexRange(heatIndexPrevMaximum);
+  strcpy(prevRange, range);
+
+  getHeatIndexRange(heatIndex);
+  strcpy(currentRange, range);
+
+  return !strcmp(currentRange, prevRange);
+}
+void getHeatIndexRange(float hi) {
+  if (hi <= cautionLowerLimit) {
+    strcpy(range, "normal");
+  }
+  
+  if (hi > cautionLowerLimit && hi <= cautionUpperLimit) {
+    strcpy(range, "caution");
+  }
+  
+  if (hi > extremeCautionLowerLimit && hi <= extremeCautionUpperLimit) {
+    strcpy(range, "extremeCaution");
   }
 
-  if (humidity >= humidityThreshold) {
-    if (hasBeenNotifiedHumidity) {
-      setNextSensor();
-      return;
-    }
-
-    if (strlen(message) > 0) {
-      return;
-    }
-
-    if (humiditySampleCount < maxSampleCount) {
-      humiditySampleCount++;
-      return;
-    }
-
-    char humStr[16];
-    dtostrf(humidity, 4, 2, humStr);
-    sprintf(message, "Humidity is %s%% and is not safe!", humStr);
-
-    isSendingNotification = true;
-    messageSentCount++;
-    return;
+  if (hi > dangerLowerLimit && hi <= dangerUpperLimit) {
+    strcpy(range, "danger");
   }
 
-  humiditySampleCount = 0;
-  if (!hasBeenNotifiedHumidity) {
-    setNextSensor();
-  } else {
-    hasBeenNotifiedHumidity = false;
+  if (hi > extremeDanger) {
+    strcpy(range, "extremeDanger");
   }
+}
+void getHeatIndexMessage() {
+  char finalMessage[32];
+  char heatIndexString[16];
+  
+  dtostrf(heatIndex, 4, 2, heatIndexString);
+  
+  getHeatIndexRange(heatIndex);
+
+  if (!strcmp(range, "caution")) {
+    sprintf(finalMessage, "Caution: Heat index is %s", heatIndexString);
+  }
+  
+  if (!strcmp(range, "extremeCaution")) {
+    sprintf(finalMessage, "Extreme caution: Heat index is %s", heatIndexString);
+  }
+
+  if (!strcmp(range, "danger")) {
+    sprintf(finalMessage, "Danger! Heat index is %s", heatIndexString);
+  }
+
+  if (!strcmp(range, "extremeDanger")) {
+    sprintf(finalMessage, "Extreme danger! Heat index is %s", heatIndexString);
+  }
+
+  strcpy(message, finalMessage);
 }
 
 void checkNewMaximum() {
@@ -530,6 +567,7 @@ void showSensorDataAndTime() {
     showCo2Ppm();
     showTemperature();
     showHumidity();
+    showHeatIndex();
     showTime();
   }
 }
@@ -564,61 +602,52 @@ void showTime() {
   lcd.print(currentMinuteBuff);
 }
 void showCo2Ppm() {
-  char ppmStr[16];
-  dtostrf(ppm, 4, 2, ppmStr);
+  char ppmString[16];
+  char finalPpmString[32];
+  
+  dtostrf(ppm, 4, 2, ppmString);
+  sprintf(finalPpmString, "CO2  %s   ", ppmString);
 
   lcd.setCursor(0, 1);
   lcd.write(3);
   lcd.setCursor(2, 1);
-  lcd.print("CO2");
-  lcd.setCursor(7, 1);
-  lcd.print(ppmStr);
-
-  if (strlen(ppmStr) == 6) {
-    lcd.setCursor(13, 1);
-    lcd.print("       ");
-  }
+  lcd.print(finalPpmString);
 }
 void showTemperature() {
-  char tempStr[16];
-  dtostrf(temperature, 4, 2, tempStr);
+  char temperatureString[16];
+  char finalTemperatureString[32];
+  
+  dtostrf(temperature, 4, 2, temperatureString);
+  sprintf(finalTemperatureString, "TEMP %s C  ", temperatureString);
 
   lcd.setCursor(0, 2);
   lcd.write(1);
   lcd.setCursor(2, 2);
-  lcd.print("TEMP");
-  lcd.setCursor(7, 2);
-  lcd.print(tempStr);
-
-  if (strlen(tempStr) == 5) {
-    lcd.setCursor(13, 2);
-  }
-  if (strlen(tempStr) == 6) {
-    lcd.setCursor(14, 2);
-  }
-
-  lcd.print("\xdf");
-  lcd.print("C    ");
+  lcd.print(finalTemperatureString);
 }
 void showHumidity() {
+  char humidityString[16];
+  char finalHumidityString[32];
+  
+  dtostrf(humidity, 4, 2, humidityString);
+  sprintf(finalHumidityString, "HUM  %s%%  ", humidityString);
+  
   lcd.setCursor(0, 3);
   lcd.write(2);
   lcd.setCursor(2, 3);
-  lcd.print("HUM");
-  lcd.setCursor(7, 3);
-  lcd.print(humidity);
+  lcd.print(finalHumidityString);
+}
+void showHeatIndex() {
+  char hiString[16];
+  char finalHiToShow[32];
+  
+  dtostrf(heatIndex, 4, 2, hiString);
+  sprintf(finalHiToShow, "HI   %s  ", hiString);
 
-  if (humidity >= 100) {
-    lcd.setCursor(15, 3);
-  }
-  if (humidity < 100 && humidity > 10) {
-    lcd.setCursor(13, 3);
-  }
-  if (humidity < 10) {
-    lcd.setCursor(12, 3);
-  }
-
-  lcd.print("%   ");
+  lcd.setCursor(0, 0);
+  lcd.write(4);
+  lcd.setCursor(2, 0);
+  lcd.print(finalHiToShow);
 }
 //~~~~~~~~~~~~~~~~~~~~~//
 
@@ -683,8 +712,7 @@ bool sendSms(char *message) {
     startedAt = timeElapsed;
     if (!strcmp(prevCommand, "txtMode")) {
       strcpy(currentCommand, "contact");
-      //      gsmSerial.println("AT+CMGS=\"+639064209700\"\r");
-      gsmSerial.println("AT+CMGS=\"+639514642872\"\r");
+      gsmSerial.println("AT+CMGS=\"+639064209700\"\r");
     }
     if (!strcmp(currentCommand, "contact") && strcmp(prevCommand, "txtMode")) {
       strcpy(currentCommand, "message");
@@ -715,20 +743,10 @@ void turnOffBuzzAlert() {
 }
 void setNextSensor() {
   if (!strcmp(currentSensorOnCheck, "co2")) {
-    strcpy(currentSensorOnCheck, "temperature");
-    return;
-  }
-
-  if (!strcmp(currentSensorOnCheck, "temperature")) {
-    strcpy(currentSensorOnCheck, "humidity");
-    return;
-  }
-
-  if (!strcmp(currentSensorOnCheck, "humidity")) {
+    strcpy(currentSensorOnCheck, "dht");
+  } else {
     strcpy(currentSensorOnCheck, "co2");
-    return;
   }
-
 }
 
 void readGsmResponse() {
