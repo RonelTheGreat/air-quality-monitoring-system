@@ -529,10 +529,10 @@ void logReadings(bool isForced) {
     file.print(temperature);
     file.print(tabChar);
 
-    file.print(humidity);
+    file.print((int)humidity);
     file.print(tabChar);
 
-    file.print(ppm);
+    file.print((int)ppm);
     file.print(tabChar);
 
     if (isCalibrating) {
@@ -541,7 +541,7 @@ void logReadings(bool isForced) {
     }
 
     if (isForced) {
-      file.print(currentMaxPpm);
+      file.print((int)currentMaxPpm);
     } else {
       file.print("");
     }
@@ -602,12 +602,11 @@ void showTime() {
   lcd.print(currentMinuteBuff);
 }
 void showCo2Ppm() {
-  char ppmString[16];
   char finalPpmString[32];
-  
-  dtostrf(ppm, 4, 2, ppmString);
-  sprintf(finalPpmString, "CO2  %s   ", ppmString);
 
+  int ppmToShow = (int)ppm;
+  sprintf(finalPpmString, "CO2  %i   ", ppmToShow);
+  
   lcd.setCursor(0, 1);
   lcd.write(3);
   lcd.setCursor(2, 1);
@@ -626,11 +625,10 @@ void showTemperature() {
   lcd.print(finalTemperatureString);
 }
 void showHumidity() {
-  char humidityString[16];
   char finalHumidityString[32];
-  
-  dtostrf(humidity, 4, 2, humidityString);
-  sprintf(finalHumidityString, "HUM  %s%%  ", humidityString);
+
+  int humidityToShow = (int)humidity;
+  sprintf(finalHumidityString, "HUM  %i%%  ", humidityToShow);
   
   lcd.setCursor(0, 3);
   lcd.write(2);
