@@ -79,6 +79,7 @@ unsigned long buzzStartedAt = 0;
 const unsigned int buzzTimeout = 5000;
 
 // sms
+char ownerNumber[16] = "+639067522468";
 bool hasBeenNotifiedHeatIndex = false;
 bool hasBeenNotifiedCo2 = false;
 bool hasStartedSendingSms = false;
@@ -710,7 +711,8 @@ bool sendSms(char *message) {
     startedAt = timeElapsed;
     if (!strcmp(prevCommand, "txtMode")) {
       strcpy(currentCommand, "contact");
-      gsmSerial.println("AT+CMGS=\"+639064209700\"\r");
+      char contactCmd[32];
+      sprintf(contactCmd, "AT+CMGS=\"%s\"", ownerNumber);
     }
     if (!strcmp(currentCommand, "contact") && strcmp(prevCommand, "txtMode")) {
       strcpy(currentCommand, "message");
