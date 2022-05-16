@@ -46,6 +46,8 @@ float humidity = 0.0;
 float temperature = 0.0;
 const float temperatureThreshold = 36.0;
 const float humidityThreshold = 90.0;
+char temperatureString[16];
+char humidityString[16];
 
 float heatIndex = 0.0;
 float heatIndexPrevMaximum = 27.0;
@@ -249,7 +251,8 @@ void initializeRtc() {
 
   // adjust time manually
   // year, month, date, hour, min, second
-  // rtc.adjust(DateTime(2021, 8, 3, 10, 29, 0));
+  // delay(10000);
+  // rtc.adjust(DateTime(2022, 5, 16, 6, 20, 0));
 }
 void initializeSdCard() {
   delay(initScreenDelay);
@@ -465,7 +468,7 @@ void getHeatIndexMessage() {
   char finalMessage[32];
   char heatIndexString[16];
   
-  dtostrf(heatIndex, 4, 2, heatIndexString);
+  dtostrf(heatIndex, 3, 1, heatIndexString);
   
   getHeatIndexRange(heatIndex);
 
@@ -527,10 +530,10 @@ void logReadings(bool isForced) {
 
     file = SD.open(txtFilename, FILE_WRITE);
 
-    file.print(temperature);
+    file.print(temperatureString);
     file.print(tabChar);
 
-    file.print((int)humidity);
+    file.print(humidityString);
     file.print(tabChar);
 
     file.print((int)ppm);
@@ -568,7 +571,6 @@ void showSensorDataAndTime() {
     showCo2Ppm();
     showTemperature();
     showHumidity();
-    showHeatIndex();
     showTime();
   }
 }
@@ -614,10 +616,9 @@ void showCo2Ppm() {
   lcd.print(finalPpmString);
 }
 void showTemperature() {
-  char temperatureString[16];
   char finalTemperatureString[32];
   
-  dtostrf(temperature, 4, 2, temperatureString);
+  dtostrf(temperature, 3, 1, temperatureString);
   sprintf(finalTemperatureString, "TEMP %s C  ", temperatureString);
 
   lcd.setCursor(0, 2);
@@ -628,25 +629,13 @@ void showTemperature() {
 void showHumidity() {
   char finalHumidityString[32];
 
-  int humidityToShow = (int)humidity;
-  sprintf(finalHumidityString, "HUM  %i%%  ", humidityToShow);
+  dtostrf(humidity, 3, 1, humidityString);
+  sprintf(finalHumidityString, "HUM  %s%%  ", humidityString);
   
   lcd.setCursor(0, 3);
   lcd.write(2);
   lcd.setCursor(2, 3);
   lcd.print(finalHumidityString);
-}
-void showHeatIndex() {
-  char hiString[16];
-  char finalHiToShow[32];
-  
-  dtostrf(heatIndex, 4, 2, hiString);
-  sprintf(finalHiToShow, "HI   %s  ", hiString);
-
-  lcd.setCursor(0, 0);
-  lcd.write(4);
-  lcd.setCursor(2, 0);
-  lcd.print(finalHiToShow);
 }
 //~~~~~~~~~~~~~~~~~~~~~//
 
