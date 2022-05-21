@@ -64,11 +64,11 @@ char range[16];
 float ppm = 0.0;
 const float ppmThreshold = 1000.0;
 const float earlyWarningThreshold = 900.0;
-unsigned int preheatTime = 300000;
+unsigned int preheatTime = 300000; // 5 minutes
 float currentMaxPpm = 0.0;
 
 // SD / logging
-const unsigned long logTimeout = 3600000;
+const unsigned long logTimeout = 3600000; // 1 hour
 unsigned long lastLogTime = 0;
 const char *tabChar = "\t";
 const char *colonChar = ":";
@@ -163,6 +163,16 @@ byte heatIndexIcon[] = {
   B11110,
   B01110
 };
+byte saveIcon[] = {
+  B00100,
+  B00100,
+  B00100,
+  B11111,
+  B01110,
+  B00100,
+  B00000,
+  B11111
+};
 
 // general
 const unsigned int initScreenDelay = 2000;
@@ -171,7 +181,9 @@ unsigned long lastSensorRead = 0;
 const unsigned int sensorReadTimeout = 2000;
 unsigned long lastScreenRefresh = 0;
 const unsigned int screenTimeout = 1000;
-
+unsigned long lastClearTime = 0;
+const unsigned int clearInterval = 60000;
+bool hideSaveIcon = false;
 //~~~~~~~~~~~~~~~~~~~~~//
 
 void setup() {
@@ -193,6 +205,7 @@ void loop() {
   turnOffBuzzAlert();
   logReadings(false);
   showSensorDataAndTime();
+  clearSaveIcon();
 }
 
 //~~~ INITIALIZATION FUNCTIONS ~~~//
@@ -204,6 +217,7 @@ void initializeLcd() {
   lcd.createChar(2, humidityIcon);
   lcd.createChar(3, co2Icon);
   lcd.createChar(4, heatIndexIcon);
+  lcd.createChar(5, saveIcon);
 }
 void welcomeScreen() {
   lcd.setCursor(5, 0);
@@ -252,7 +266,7 @@ void initializeRtc() {
   // adjust time manually
   // year, month, date, hour, min, second
   // delay(10000);
-  // rtc.adjust(DateTime(2022, 5, 16, 6, 20, 0));
+  // rtc.adjust(DateTime(2022, 5, 18, 12, 24, 0));
 }
 void initializeSdCard() {
   delay(initScreenDelay);
@@ -431,7 +445,7 @@ void checkHeatIndex() {
     hasBeenNotifiedHeatIndex = false;
   }
 }
-bool inPrevRange() {  
+bool inPrevRange() {
   char prevRange[16];
   char currentRange[16];
 
@@ -447,11 +461,11 @@ void getHeatIndexRange(float hi) {
   if (hi <= cautionLowerLimit) {
     strcpy(range, "normal");
   }
-  
+
   if (hi > cautionLowerLimit && hi <= cautionUpperLimit) {
     strcpy(range, "caution");
   }
-  
+
   if (hi > extremeCautionLowerLimit && hi <= extremeCautionUpperLimit) {
     strcpy(range, "extremeCaution");
   }
@@ -467,15 +481,15 @@ void getHeatIndexRange(float hi) {
 void getHeatIndexMessage() {
   char finalMessage[32];
   char heatIndexString[16];
-  
+
   dtostrf(heatIndex, 3, 1, heatIndexString);
-  
+
   getHeatIndexRange(heatIndex);
 
   if (!strcmp(range, "caution")) {
     sprintf(finalMessage, "Caution: Heat index is %s", heatIndexString);
   }
-  
+
   if (!strcmp(range, "extremeCaution")) {
     sprintf(finalMessage, "Extreme caution: Heat index is %s", heatIndexString);
   }
@@ -526,43 +540,52 @@ void checkNewMaximum() {
 void logReadings(bool isForced) {
   if (( timeElapsed - lastLogTime >= logTimeout ) || isForced) {
     lastLogTime = timeElapsed;
+    lastClearTime = lastLogTime;
     DateTime current = rtc.now();
+
+    hideSaveIcon = true;
 
     file = SD.open(txtFilename, FILE_WRITE);
 
-    file.print(temperatureString);
-    file.print(tabChar);
-
-    file.print(humidityString);
-    file.print(tabChar);
-
-    file.print((int)ppm);
-    file.print(tabChar);
-
-    if (isCalibrating) {
-      file.print(rZero);
+    if (file) {
+      file.print(temperatureString);
       file.print(tabChar);
-    }
 
-    if (isForced) {
-      file.print((int)currentMaxPpm);
+      file.print(humidityString);
+      file.print(tabChar);
+
+      file.print((int)ppm);
+      file.print(tabChar);
+
+      if (isCalibrating) {
+        file.print(rZero);
+        file.print(tabChar);
+      }
+
+      if (isForced) {
+        file.print((int)currentMaxPpm);
+      } else {
+        file.print("");
+      }
+      file.print(tabChar);
+
+      file.print(current.hour());
+      file.print(colonChar);
+      file.print(current.minute());
+      file.print(tabChar);
+
+      file.print(current.month());
+      file.print(forwardSlashChar);
+      file.print(current.day());
+      file.print(forwardSlashChar);
+      file.println(current.year());
+
+      file.close();
+
+      showSavingIndicator(true);
     } else {
-      file.print("");
+      showSavingIndicator(false);
     }
-    file.print(tabChar);
-
-    file.print(current.hour());
-    file.print(colonChar);
-    file.print(current.minute());
-    file.print(tabChar);
-
-    file.print(current.month());
-    file.print(forwardSlashChar);
-    file.print(current.day());
-    file.print(forwardSlashChar);
-    file.println(current.year());
-
-    file.close();
   }
 }
 void showSensorDataAndTime() {
@@ -609,7 +632,7 @@ void showCo2Ppm() {
 
   int ppmToShow = (int)ppm;
   sprintf(finalPpmString, "CO2  %i   ", ppmToShow);
-  
+
   lcd.setCursor(0, 1);
   lcd.write(3);
   lcd.setCursor(2, 1);
@@ -617,7 +640,7 @@ void showCo2Ppm() {
 }
 void showTemperature() {
   char finalTemperatureString[32];
-  
+
   dtostrf(temperature, 3, 1, temperatureString);
   sprintf(finalTemperatureString, "TEMP %s C  ", temperatureString);
 
@@ -631,15 +654,30 @@ void showHumidity() {
 
   dtostrf(humidity, 3, 1, humidityString);
   sprintf(finalHumidityString, "HUM  %s%%  ", humidityString);
-  
+
   lcd.setCursor(0, 3);
   lcd.write(2);
   lcd.setCursor(2, 3);
   lcd.print(finalHumidityString);
 }
+void showSavingIndicator(bool success) {
+  lcd.setCursor(19, 3);
+  if (success) {
+    lcd.write(5);
+  } else {
+    lcd.print('x');
+  }
+}
 //~~~~~~~~~~~~~~~~~~~~~//
 
 //~~~ HELPER FUNCTIONS ~~~//
+void clearSaveIcon() {
+  if (timeElapsed - lastClearTime >= clearInterval && hideSaveIcon) {
+    hideSaveIcon = false;
+    lcd.setCursor(19, 3);
+    lcd.print(' ');
+  }
+}
 void getNetworkStatus() {
   if (isResponseReady) {
     static byte counter = 0;
@@ -702,6 +740,7 @@ bool sendSms(char *message) {
       strcpy(currentCommand, "contact");
       char contactCmd[32];
       sprintf(contactCmd, "AT+CMGS=\"%s\"", ownerNumber);
+      gsmSerial.println(contactCmd);
     }
     if (!strcmp(currentCommand, "contact") && strcmp(prevCommand, "txtMode")) {
       strcpy(currentCommand, "message");
