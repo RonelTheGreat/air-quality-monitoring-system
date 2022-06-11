@@ -388,9 +388,7 @@ void checkCo2() {
       return;
     }
 
-    char ppmStr[16];
-    dtostrf(ppm, 4, 2, ppmStr);
-    sprintf(message, "Co2 concentration is %s ppm and is not safe!", ppmStr);
+    sprintf(message, "Co2 concentration is %i ppm and is not safe!", (int)ppm);
 
     buzzStartedAt = timeElapsed;
     buzz(true);
